@@ -1,0 +1,47 @@
+loki:
+  # 关键：必须加在这里
+  pspEnabled: false # 关闭 PodSecurityPolicy 安全策略，k8s新版本已经弃用PSP，不关闭会报错
+  persistence: # 持久化配置：日志数据落盘，pod重建日志不丢失
+    enabled: true # 开启持久化存储
+    storageClassName: local-path # 使用local-path 本地存储类（和你前面prometheus保持一致）
+    size: 10Gi # 给Loki分配10Gi磁盘空间存放日志
+  resources: # Loki Pod 的资源配额
+    requests: # 最低保障资源（调度用）
+      cpu: 200m # 最小0.2核CPU
+      memory: 256Mi # 最小256MB内存
+    limits: # 资源上限，超过会被限流/杀容器
+      cpu: 500m # CPU最大0.5核
+      memory: 512Mi # 内存最大512MB
+  image: # Loki镜像配置
+    repository: grafana/loki # 镜像仓库地址：grafana官方loki镜像
+    tag: "2.9.8" # 镜像版本号 2.9.8
+    pullPolicy: IfNotPresent # 拉取策略：本地有镜像就不拉，没有才去拉
+
+promtail: # Promtail: 日志采集代理，DaemonSet部署，每个节点上跑，抓取容器日志
+  # 关键：必须加在这里
+  pspEnabled: false # 同样关闭PSP安全策略，适配新版k3s/k8s
+  config: # Promtail核心采集配置
+    clients: # 日志推送客户端配置，指定推送到哪个Loki
+      - url: http://loki:3100/loki/api/v1/push # Loki的svc内部地址，日志推送到这个接口
+        tenant_id: fake # 多租户ID，单集群单租户随便填一个fake即可，loki默认单租户模式
+    snippets: # 配置片段，用来复用通用流水线
+      pipelineStages: # 日志处理流水线
+        - docker: {} # 启用docker日志解析，自动解析容器json日志(stdout/stderr)
+  resources: # Promtail 资源配额
+    requests: # 最低保障资源
+      cpu: 100m # 最低0.1核
+      memory: 128Mi # 最低128M
+    limits: # 资源上限
+      cpu: 200m # 上限0.2核
+      memory: 256Mi # 上限256M
+
+grafana: # 这个是loki chart自带的grafana，你前面已经单独部署了kube-prometheus-stack里的grafana，这里关掉数据源自动注入
+  sidecar:
+    datasources:
+      enabled: false # 关闭sidecar自动注入Loki数据源，避免和你自己的grafana冲突，你手动在grafana里添加loki数据源
+
+# 下面这个顶层 rbac 可以保留，也可以删掉，主要靠上面的两个 pspEnabled
+rbac:
+  create: false # 不自动创建RBAC权限（测试小集群简化部署；生产一般打开，给promtail读取日志权限）
+  pspEnabled: false # 顶层全局关闭PSP
+

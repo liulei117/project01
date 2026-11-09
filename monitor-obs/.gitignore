@@ -1,0 +1,8 @@
+# 镜像和helm离线包
+*.tar
+*.tgz
+*.tar.gz
+*.zip
+# 不需要提交的缓存
+.idea/
+.vscode/

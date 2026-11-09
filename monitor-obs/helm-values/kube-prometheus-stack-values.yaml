@@ -1,0 +1,153 @@
+# ===================== Prometheus 主配置 =====================
+prometheus:
+  retention: 7d                        # 指标数据保留时长：7天，超过自动清理旧监控数据
+  resources:                            # Prometheus Pod资源申请（requests=最低保障资源）
+    requests:
+      cpu: 500m                         # 启动最低保证 0.5核CPU
+      memory: 512Mi                     # 启动最低保证 512MB内存
+    limits:                             # 资源上限，Pod不能超过这个值，超了会被限流/杀容器
+      cpu: 1000m                        # CPU最大1核
+      memory: 1Gi                       # 内存最大1GB
+  serviceMonitorSelector:               # 用来匹配ServiceMonitor CRD（Prometheus自动抓取监控的规则）
+    matchLabels:
+      prometheus: kube-prometheus       # 只抓取带有 label prometheus=kube-prometheus 的 ServiceMonitor
+  storageSpec:                          # 开启持久化存储，把监控数据存到PV里，Pod重建数据不丢失
+    volumeClaimTemplate:
+      spec:
+        storageClassName: local-path    # 使用本地存储类 local-path（本地磁盘存储）
+        accessModes: ["ReadWriteOnce"]  # 访问模式：单节点读写（本地盘常用）
+        resources:
+          requests:
+            storage: 10Gi               # 申请10G存储空间存放prometheus时序指标
+
+# ===================== Alertmanager 告警管理器 =====================
+alertmanager:
+  alertmanagerSpec:
+    alertmanagerConfigSelector:         # 匹配AlertmanagerConfig告警配置CRD（钉钉/企业微信告警规则）
+      matchLabels:
+        alertmanager: loki              # 匹配 label alertmanager=loki 的告警配置
+    alertmanagerConfigNamespaceSelector: {} # 不限制命名空间，所有ns下符合label的AlertmanagerConfig都生效
+    alertmanagerConfigMatcherStrategy:   # 标签匹配策略
+      type: None                         # 匹配策略：None，不使用额外标签过滤
+  resources:                             # Alertmanager 容器资源限制
+    requests:
+      cpu: 100m                          # 最低 0.1核CPU
+      memory: 128Mi                      # 最低128MB内存
+    limits:
+      cpu: 200m                          # 上限0.2核
+      memory: 256Mi                      # 上限256MB
+  service:
+    type: NodePort                       # Service类型 NodePort，节点暴露端口访问alertmanager页面
+    nodePort: 30904                      # 固定节点端口30904，访问：节点IP:30904
+
+# ===================== Grafana 可视化大屏 =====================
+grafana:
+  enabled: true                          # 开启Grafana组件，启用监控面板
+  persistence:                           # Grafana持久化（面板、账号、配置保存）
+    enabled: true                        # 开启持久化
+    storageClassName: local-path         # 同样使用本地存储类
+    size: 5Gi                            # 申请5G存储
+  resources:                             # Grafana Pod资源
+    requests:
+      cpu: 200m                          # 最低0.2核
+      memory: 256Mi                      # 最低256M
+    limits:
+      cpu: 500m                          # 上限0.5核
+      memory: 512Mi                      # 上限512M
+  adminPassword: Admin@123               # Grafana默认管理员admin的密码
+  service:
+    type: NodePort                       # NodePort暴露grafana
+    nodePort: 30903                      # 固定节点端口30903，节点IP:30903访问grafana
+  #【核心修复1】：禁用 Chart 自带的默认数据源
+  sidecar:
+    datasources:
+      enabled: true                      # 开启数据源sidecar（自动加载数据源配置）
+      defaultDatasourceEnabled: false     # 关闭helm自带默认数据源，避免冲突，我们自定义数据源
+  #【核心修复2】：使用官方推荐列表格式自定义数据源
+  additionalDataSources:                  # 自定义Grafana数据源列表
+    - name: Prometheus                   # 数据源名称：Prometheus
+      type: prometheus                   # 数据源类型是prometheus
+      access: proxy                      # 访问模式：grafana后端代理访问prometheus（推荐，不用前端跨域）
+      url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090 # prometheus集群内svc地址，集群内部域名访问
+      isDefault: false                    # 不设置为默认数据源
+      editable: true                     # 页面上可以手动编辑这个数据源
+      jsonData:
+        httpMethod: POST                 # 使用POST方式查询prometheus
+        timeInterval: 15s                # 最小采样间隔15秒
+    - name: Alertmanager                 # 第二个数据源，告警管理器
+      type: alertmanager
+      access: proxy
+      url: http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093 # alertmanager集群内svc地址
+      jsonData:
+        handleGrafanaManagedAlerts: false # 关闭grafana托管告警，告警交给Alertmanager统一管理
+
+# ===================== kube-state-metrics 集群资源指标采集器 =====================
+# 作用：采集k8s原生资源状态指标：Pod/Deployment/Secret/Ingress等对象状态指标
+kube-state-metrics:
+  resources:                             # kube-state-metrics容器资源
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  config:
+    resources:                           # 配置：要采集哪些k8s资源对象的指标
+      - certificatesigningrequests
+      - configmaps
+      - cronjobs
+      - daemonsets
+      - deployments
+      - endpoints
+      - horizontalpodautoscalers
+      - ingresses
+      - networkpolicies
+      - persistentvolumeclaims
+      - persistentvolumes
+      - poddisruptionbudgets
+      - replicasets
+      - replicationcontrollers
+      - resourcequotas
+      - secrets
+      - services
+      - statefulsets
+      - storageclasses
+      - validatingwebhookconfigurations
+      - pods                             # 上面一长串：告诉kube-state-metrics，我要监控这些k8s资源，收集它们状态指标
+
+# ===================== Prometheus Operator 组件配置 =====================
+prometheusOperator:
+  admissionWebhooks:                     # Webhook（校验PrometheusRule、ServiceMonitor准入CRD合法性）
+    enabled: false                       # 关闭准入webhook，简化部署，很多小集群直接关掉
+    patch:
+      enabled: false
+  tls:
+    enabled: false                       # 关闭operator自身tls加密
+
+# ===================== kubeProxy 监控配置 =====================
+kubeProxy:
+  enabled: false                         # 不单独抓取kube-proxy指标（按需开启）
+
+# ===================== kubeScheduler 监控配置 =====================
+kubeScheduler:
+  enabled: false                         # 不采集kube调度器指标
+
+# ===================== kubeControllerManager 监控配置 =====================
+kubeControllerManager:
+  enabled: false                         # 不采集kube控制器管理器指标
+
+# ===================== kubelet 监控配置（节点kubelet指标：CPU/内存/磁盘） =====================
+kubelet:
+  serviceMonitor:
+    enabled: true                        # 开启kubelet的ServiceMonitor，抓取节点kubelet指标
+    https: true                          # kubelet是https接口
+    skipTLSVerify: true                  # 跳过https证书校验（自建k8s证书大多自签，所以跳过）
+  cAdvisor:
+    enabled: true                        # 开启cAdvisor采集，容器资源监控（每个容器CPU/内存/磁盘）
+  authorization:                         # 访问kubelet接口的鉴权配置
+    type: Bearer                         # 使用Bearer token鉴权
+    credentials:
+      secret:
+        name: prometheus-kube-prometheus-stack # secret名称
+        key: token                       # secret里面key名字是token，拿这个token去鉴权kubelet
+

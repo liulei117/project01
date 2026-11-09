@@ -1,0 +1,33 @@
+apiVersion: monitoring.coreos.com/v1alpha1 # api版本，AlertmanagerConfig这个CRD资源所属的API组和版本
+kind: AlertmanagerConfig # 资源类型：AlertmanagerConfig，专门给Prometheus Operator用来配置Alertmanager告警规则、路由、接收端
+metadata: # 资源元信息
+  name: dingtalk # 这个AlertmanagerConfig资源的名字，叫dingtalk
+  namespace: monitoring # 资源放在monitoring命名空间，要和前面Prometheus、Alertmanager同ns
+  labels:
+    alertmanager: loki # label标签！！和你前面values里alertmanagerConfigSelector匹配用的，alertmanager=loki
+spec:
+  # 告警路由配置：控制告警怎么分组、等待多久、多久重复发
+  route:
+    groupBy: ['alertname', 'instance'] # 告警分组依据：相同alertname（告警名称） + instance（实例）的告警合并成一组推送
+    groupWait: 30s # 分组等待时间：收到第一条告警后，等30s，收集同组其他告警，一次性推送，防止告警刷屏
+    groupInterval: 5m # 同一组上一次告警推送结束后，间隔5分钟才发这一组新的告警
+    repeatInterval: 30m # 告警持续没恢复时，每隔30分钟重复推送一次告警（告警轰炸冷却）
+    matchers: # 告警匹配条件，只有满足下面标签条件的告警，才走这条路由
+      - name: severity # 匹配标签key: severity（告警级别）
+        value: critical # 标签value: critical（严重级别告警）
+        matchType: = # 匹配方式：等于
+      - name: namespace # 匹配标签key: namespace
+        value: monitoring # 标签value: monitoring命名空间里面产生的告警
+        matchType: = # 匹配方式：等于
+    receiver: 'dingtalk-receiver' # 匹配成功后，交给名叫dingtalk-receiver的接收端发送
+    continue: true # continue=true: 这条路由匹配到之后，**继续往下匹配其他子路由**；false就停止不再往下走
+  # 告警接收者列表：定义告警发给谁，这里是钉钉webhook中转服务
+  receivers:
+    - name: 'dingtalk-receiver' # 接收端名称，和上面route.receiver对应
+      webhookConfigs: # 使用webhook方式推送告警（对接钉钉webhook中转服务）
+        # 告警转发到prometheus-webhook-dingtalk中间件的集群内SVC地址
+        - url: 'http://prometheus-webhook-dingtalk.monitoring.svc.cluster.local:8060/dingtalk/webhook1/send' # 修改为指向中间件 Service 的地址；注意：末尾的 webhook1 必须与你 ConfigMap 中 targets 下面定义的名称一致
+          sendResolved: true # sendResolved=true: 告警恢复（resolved）的时候，也发送一条【告警恢复通知】到钉钉
+          maxAlerts: 0 # 单次请求最多携带多少条告警，0=不限制数量
+          httpConfig: {} # http请求配置，这里空着，不配置认证、tls等，集群内部http访问不需要
+

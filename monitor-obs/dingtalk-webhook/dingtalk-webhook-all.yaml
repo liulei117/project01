@@ -1,0 +1,61 @@
+apiVersion: v1 # API版本，ConfigMap资源所属api版本
+kind: ConfigMap # 资源类型：ConfigMap，配置映射，把文本配置挂载进Pod，不用重新打包镜像
+metadata:
+  name: prometheus-webhook-dingtalk-config # ConfigMap名称
+  namespace: monitoring # 放在monitoring命名空间，和告警体系统一
+data:
+  config.yml: |- # 里面存放的配置文件名，|- 代表多行文本
+    targets: # targets配置块
+      webhook1: # 这个名称（webhook1）可以自定义，后续Alertmanager配置需要对应
+        # 钉钉机器人webhook地址，从钉钉机器人页面复制
+        url: https://oapi.dingtalk.com/robot/send?access_token=1c909fd75467857d2e0244b906537bcda0820ec8b86b25c062670397676fb22d
+        # 钉钉机器人加签密钥，开启安全加签时填写，机器人页面生成
+        secret: SEC4f4fe7eef367c2a167ea7bacd854bf37c77652b0046bc7bd225fbf37142a3135
+---
+apiVersion: apps/v1 # Deployment 资源所属api版本
+kind: Deployment # 资源类型：Deployment，用来管理无状态Pod
+metadata:
+  name: prometheus-webhook-dingtalk # Deployment名称
+  namespace: monitoring # 放在monitoring命名空间，和告警体系统一
+spec:
+  replicas: 1 # 副本数量，启动1个Pod
+  selector:
+    matchLabels:
+      app: prometheus-webhook-dingtalk # 选择器，匹配标签app=xxx的Pod，用来管控Pod
+  template:
+    metadata:
+      labels:
+        app: prometheus-webhook-dingtalk # Pod打上这个标签，给Service做后端匹配
+    spec:
+      containers:
+      - name: prometheus-webhook-dingtalk # 容器名称
+        image: docker.1ms.run/timonwong/prometheus-webhook-dingtalk:v2.1.0 # 中转程序镜像，timonwong的钉钉webhook转换工具
+        imagePullPolicy: IfNotPresent # 镜像拉取策略：本地有就不拉，没有才拉取
+        args:
+        - "--config.file=/etc/prometheus-webhook-dingtalk/config.yml" # 启动参数，指定程序读取的配置文件路径
+        ports:
+        - containerPort: 8060 # 容器内部监听端口8060，和前面AlertmanagerConfig里的端口一致
+        volumeMounts:
+        - name: config # 挂载卷名称
+          mountPath: /etc/prometheus-webhook-dingtalk # 挂载到容器内这个目录
+      volumes:
+      - name: config # 卷名称，和volumeMounts对应
+        configMap:
+          name: prometheus-webhook-dingtalk-config # 使用这个ConfigMap作为配置卷，就是上方的ConfigMap资源
+---
+apiVersion: v1 # API版本，Service资源所属api版本
+kind: Service # 资源类型：Service，给Pod提供稳定集群内访问地址
+metadata:
+  name: prometheus-webhook-dingtalk # Service名称，集群内访问域名就是这个名字
+  namespace: monitoring
+  labels:
+    app: prometheus-webhook-dingtalk
+spec:
+  selector:
+    app: prometheus-webhook-dingtalk # 选中带有该标签的Pod作为后端
+  ports:
+  - name: http
+    port: 8060 # Service对外暴露端口（集群内访问用8060）
+    targetPort: 8060 # 转发到Pod里面的8060端口
+    protocol: TCP
+

@@ -1,0 +1,48 @@
+apiVersion: monitoring.coreos.com/v1 # API版本，PrometheusRule 这个CRD资源所属API组
+kind: PrometheusRule # 资源类型：PrometheusRule，由Prometheus Operator管理，用来定义告警规则、记录规则
+metadata: # 资源元信息
+  name: cluster-alert-rules # 这个规则资源的名称
+  namespace: monitoring # 放在monitoring命名空间，和Prometheus、Alertmanager保持一致
+  labels:
+    release: kube-prometheus-stack # 标签，Prometheus Operator会根据标签匹配，让对应的Prometheus加载这套告警规则
+spec:
+  groups: # 规则组，可以有多组规则
+    - name: k3s-cluster.rules # 规则组名称，方便区分、排查
+      rules: # 告警规则列表
+      # 规则1：节点CPU使用率超过80%
+      - alert: NodeHighCPU # 告警名称NodeHighCPU
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 80 # expr：告警判断表达式；irate：取2分钟内空闲CPU的瞬时增长率；avg by(instance) 按节点instance聚合；100减去空闲占比 = CPU使用率；当使用率>80% 就触发告警
+        for: 2m # 持续条件：指标满足条件必须持续2分钟才触发告警，防止瞬间毛刺误报
+        labels: # 给这条告警打上标签，Alertmanager路由靠标签匹配
+          severity: critical # 告警级别：warning 警告
+          namespace: monitoring # 打namespace=monitoring标签，用来匹配前面AlertmanagerConfig的路由
+        annotations: # 告警附加描述信息，钉钉通知里展示
+          description: "节点 {{ $labels.instance }} CPU使用率超过80%，当前值: {{ $value | printf \"%.2f\" }}"
+      # 规则2：节点内存使用率超过80%
+      - alert: NodeHighMemory # 告警名称NodeHighMemory
+        expr: (1 - (node_memory_MemFree_bytes + node_memory_Buffers_bytes + node_memory_Cached_bytes) / node_memory_MemTotal_bytes) * 100 > 80 # 总内存 - 空闲内存 - buffer - cache = 实际已使用内存，计算使用率，大于80%触发告警
+        for: 2m # 持续2分钟才告警，防止瞬时波动
+        labels:
+          severity: critical
+          namespace: monitoring
+        annotations:
+          description: "节点 {{ $labels.instance }} 内存使用率超过80%，当前值: {{ $value | printf \"%.2f\" }}"
+      # 规则3：Pod 在 5 分钟内重启次数大于 2次
+      - alert: PodRestartFrequently # 告警名称PodRestartFrequently
+        expr: increase(kube_pod_container_status_restarts_total[5m]) > 2 # increase：统计5分钟内这个指标的增量，也就是5分钟内Pod重启次数，大于2次触发告警
+        for: 10s # 满足条件持续10s就告警，故障比较紧急，等待时间短
+        labels:
+          severity: critical # 告警级别：critical 严重（这条会匹配你上一份钉钉路由）
+          namespace: monitoring
+        annotations:
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} 在5分钟内频繁重启！重启次数: {{ $value }}"
+      # 规则4：容器 OOM 被杀死（内存溢出）
+      - alert: PodOOMKilled # 告警名称PodOOMKilled
+        expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1 # 指标含义：容器上次退出原因是OOMKilled（内存超限被内核杀掉），等于1代表发生了OOM
+        for: 10s
+        labels:
+          severity: critical # critical严重级别，会被转发钉钉
+          namespace: monitoring
+        annotations:
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} 发生 OOM，容器内存溢出被内核杀死！"
+
